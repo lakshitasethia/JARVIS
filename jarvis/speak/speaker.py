@@ -35,6 +35,12 @@ class Speaker:
             self._pending += 1
         self._text_q.put((self._generation, text))
 
+    def play(self, audio: np.ndarray) -> None:
+        """Queue raw audio (e.g. an earcon) at the TTS sample rate, skipping synthesis."""
+        with self._lock:
+            self._pending += 1
+        self._audio_q.put((self._generation, audio))
+
     def begin_turn(self) -> None:
         self.first_audio_at = None
 

@@ -19,6 +19,10 @@ class Settings:
     show_timing: bool
     # Ears
     stt_model: str
+    wake_threshold: float
+    silence_seconds: float
+    listen_timeout: float
+    followup_seconds: float
     # Voice
     tts_engine: str  # kokoro | say | none
     voice: str
@@ -44,6 +48,10 @@ def load_settings() -> Settings:
         max_history_messages=int(os.getenv("JARVIS_MAX_HISTORY", "20")),
         show_timing=os.getenv("JARVIS_SHOW_TIMING", "true").lower() == "true",
         stt_model=os.getenv("JARVIS_STT_MODEL", "whisper-large-v3-turbo"),
+        wake_threshold=float(os.getenv("JARVIS_WAKE_THRESHOLD", "0.5")),
+        silence_seconds=float(os.getenv("JARVIS_SILENCE_SECONDS", "0.8")),
+        listen_timeout=float(os.getenv("JARVIS_LISTEN_TIMEOUT", "8")),
+        followup_seconds=float(os.getenv("JARVIS_FOLLOWUP_SECONDS", "6")),
         tts_engine=os.getenv("JARVIS_TTS", "kokoro").lower(),
         voice=os.getenv("JARVIS_VOICE", "bm_george"),
         speech_speed=float(os.getenv("JARVIS_SPEECH_SPEED", "1.0")),

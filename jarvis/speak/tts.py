@@ -31,9 +31,14 @@ class KokoroTTS:
                     f"Kokoro file not found: {path}\n"
                     "Download the model files with:  uv run python -m jarvis.speak.download"
                 )
+        import warnings
+
         from kokoro_onnx import Kokoro  # imported lazily: it's slow to import
 
-        self._kokoro = Kokoro(model_path, voices_path)
+        with warnings.catch_warnings():
+            # kokoro-onnx asks onnxruntime for CUDA, which Macs don't have; harmless.
+            warnings.filterwarnings("ignore", message=".*CUDAExecutionProvider.*")
+            self._kokoro = Kokoro(model_path, voices_path)
         if voice not in self._kokoro.get_voices():
             raise SystemExit(f"Unknown Kokoro voice '{voice}'. Try: bm_george, bm_lewis, bm_daniel, bm_fable")
         self.voice = voice
