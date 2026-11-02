@@ -219,7 +219,7 @@ Each phase ends with something that **works and can be demoed**.
 | **0. Foundation** ✅ | `uv` project, config/.env, logging, Claude API key, text chat with JARVIS persona + streaming | You can type to JARVIS in the terminal and it replies in character |
 | **1. Voice I/O (push-to-talk)** ✅ | Mic capture, STT (Groq Whisper turbo), TTS (Kokoro int8, local; `say` fallback), sentence streaming. Measure latency per stage. | Hold a key, speak, and hear JARVIS answer |
 | **2. Hands-free** ✅ | openWakeWord "hey jarvis", Silero VAD end-of-speech, follow-up window (keep listening ~8 s after a reply) | "Hey Jarvis, what time is it?" works with no keyboard |
-| **3. Tools** | Agent loop + native tools (time, weather, web search, open apps, volume, timers, macOS reminders/notes) + permission tiers + confirmation | "Open Spotify and set a 10-minute timer" works |
+| **3. Tools** ✅ | Agent loop + native tools (time, weather, web search, open apps, volume, timers, macOS reminders/notes) + permission tiers + confirmation | "Open Spotify and set a 10-minute timer" works |
 | **4. Natural conversation** | Barge-in (interrupt while speaking), smart turn detection, latency tuning | You can cut JARVIS off mid-sentence and it stops |
 | **5. Memory** | SQLite memory + remember/recall tools, user profile injected into the prompt | "Remember I like my coffee black" persists across restarts |
 | **6. MCP integrations** | MCP client; connect calendar, email, files, browser (Playwright), GitHub | "What's on my calendar tomorrow?" / "Summarize my unread email" |
@@ -256,6 +256,13 @@ Llama 3.x models were removed from free/Developer accounts on 16 Aug 2026 (enter
 - gpt-oss: 30 requests/min, 1,000 requests/day, **8,000 tokens/min**, 200k tokens/day.
   → One voice turn ≈ 1.5–3k tokens (system prompt + history + tool schemas), so only ~3–4 turns/minute. Every tool-call round trip is another request. **Keep history trimmed and tool schemas lean**, or upgrade to the pay-as-you-go Developer tier.
 - Whisper: 20 requests/min, 2,000/day, 7,200 audio-seconds/hour.
+
+**Measured on this account (3 Nov 2026):** limits are 8,000 tokens/min and 1,000 requests/day. One request with our system prompt + 10 tool schemas + web search ≈ 1,300 prompt tokens before any history, and a tool-using turn is 2 requests. So expect roughly 2–3 tool turns per minute on the free tier.
+
+**gpt-oss quirks found in testing (handled in `brain/agent.py`):**
+- After a tool call it sometimes writes the answer twice, glued together ("…breeze.London is…"). `RepeatGuard` stops at the seam.
+- It occasionally invents a tool name (`get_volume`); Groq rejects the call. We retry once, then apologise rather than go silent.
+- Web-search answers carry citation markers like 【1†L9-L17】 and narrow no-break spaces; stripped before display/speech.
 
 **Updated stack:**
 `openWakeWord (local) → Silero VAD (local) → Groq Whisper turbo (cloud) → Groq gpt-oss-120b (cloud) → Kokoro (local)`.

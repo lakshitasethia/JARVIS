@@ -17,6 +17,9 @@ class Settings:
     user_name: str
     max_history_messages: int
     show_timing: bool
+    # Tools
+    home_location: str
+    web_search: bool
     # Ears
     stt_model: str
     wake_threshold: float
@@ -47,6 +50,8 @@ def load_settings() -> Settings:
         user_name=os.getenv("JARVIS_USER_NAME", "sir"),
         max_history_messages=int(os.getenv("JARVIS_MAX_HISTORY", "20")),
         show_timing=os.getenv("JARVIS_SHOW_TIMING", "true").lower() == "true",
+        home_location=os.getenv("JARVIS_HOME_LOCATION", "").strip(),
+        web_search=os.getenv("JARVIS_WEB_SEARCH", "true").lower() == "true",
         stt_model=os.getenv("JARVIS_STT_MODEL", "whisper-large-v3-turbo"),
         wake_threshold=float(os.getenv("JARVIS_WAKE_THRESHOLD", "0.5")),
         silence_seconds=float(os.getenv("JARVIS_SILENCE_SECONDS", "0.8")),

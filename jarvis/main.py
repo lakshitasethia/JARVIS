@@ -6,6 +6,7 @@
 
 import argparse
 import re
+import threading
 import time
 
 import groq
@@ -13,20 +14,24 @@ from rich.console import Console
 
 from jarvis.audio.mic import MicStream
 from jarvis.audio.recorder import Recorder, duration, peak_level, to_wav_bytes
+from jarvis.brain.agent import Agent, TextDelta, ToolFinished, ToolStarted, summarize_arguments
 from jarvis.brain.conversation import Conversation
 from jarvis.brain.llm import GroqLLM
 from jarvis.brain.persona import system_prompt
 from jarvis.config import Settings, load_settings
 from jarvis.listen.endpoint import EndpointConfig, Status, UtteranceCollector
 from jarvis.listen.stt import GroqSTT
+from jarvis.listen.yesno import parse_yes_no
 from jarvis.speak import earcons
 from jarvis.speak.sentences import SentenceSplitter, clean_for_speech
 from jarvis.speak.speaker import Speaker
 from jarvis.speak.tts import KokoroTTS, SayTTS
+from jarvis.tools import build_registry
+from jarvis.tools.timers import TimerManager
 
 PTT_HELP = (
     "[dim]Enter on an empty line = talk (Enter again to stop) · or just type\n"
-    "Commands: /mute (toggle voice) · /reset (forget chat) · /help · /quit · Ctrl+C stops JARVIS[/dim]"
+    "Commands: /mute (toggle voice) · /reset (forget chat) · /tools · /help · /quit · Ctrl+C stops JARVIS[/dim]"
 )
 HANDSFREE_HELP = (
     "[dim]Say [bold]\"Hey Jarvis\"[/bold], wait for the chime, then talk. After JARVIS answers you can "
@@ -35,6 +40,7 @@ HANDSFREE_HELP = (
 )
 MIN_SECONDS = 0.4
 MIN_PEAK = 300  # below this a push-to-talk recording is effectively silent
+FILLER_AFTER_SECONDS = 2.0  # say "One moment." if nothing has happened by then
 SLEEP_PHRASES = {"never mind", "nevermind", "go to sleep", "stop", "cancel", "that's all", "that is all", "nothing"}
 
 
@@ -48,7 +54,10 @@ def groq_error_message(e: groq.APIError) -> str:
     if isinstance(e, groq.AuthenticationError):
         return "Groq rejected the API key. Check GROQ_API_KEY in .env."
     if isinstance(e, groq.RateLimitError):
-        return "Groq rate limit hit (free tier). Wait a moment and try again."
+        return (
+            "Groq's free-tier limit is used up for the moment (8,000 tokens a minute, 1,000 requests a day). "
+            "Give it a minute, or upgrade to Groq's pay-as-you-go Developer tier for much higher limits."
+        )
     if isinstance(e, groq.APIConnectionError):
         return "Can't reach Groq. Check your internet connection."
     if isinstance(e, groq.APIStatusError):
@@ -69,17 +78,32 @@ class Jarvis:
     def __init__(self, settings: Settings, console: Console):
         self.s = settings
         self.console = console
-        self.llm = GroqLLM(settings.groq_api_key, settings.model, settings.reasoning_effort)
+        self.llm = GroqLLM(
+            settings.groq_api_key,
+            settings.model,
+            settings.reasoning_effort,
+            settings.web_search,
+            on_wait=lambda secs: self.console.print(
+                f"\n[dim yellow]  (Groq free-tier limit reached, waiting {secs:.0f}s)[/dim yellow]"
+            ),
+        )
         self.stt = GroqSTT(settings.groq_api_key, settings.stt_model)
         self.speaker = build_speaker(settings)
         self.muted = False
-        self.convo = Conversation(system_prompt(settings.user_name), settings.max_history_messages)
+        self.timers = TimerManager(self.announce)
+        self.agent = Agent(self.llm, build_registry(self.timers, settings.home_location))
+        self.convo = Conversation(
+            lambda: system_prompt(settings.user_name, settings.home_location), settings.max_history_messages
+        )
+        # How to ask the user yes/no; each mode installs its own.
+        self.confirm = self.confirm_typed
 
     def banner(self, mode: str) -> None:
         voice = self.s.tts_engine if self.speaker else "none"
+        search = " + web search" if self.llm.web_search else ""
         self.console.print(
             f"[bold cyan]JARVIS[/bold cyan] online · {mode} · brain: {self.llm.model} · "
-            f"ears: {self.stt.model} · voice: {voice}"
+            f"ears: {self.stt.model} · voice: {voice} · tools: {len(self.agent.tools.names())}{search}"
         )
         if self.speaker:
             self.speaker.warm_up()
@@ -89,19 +113,53 @@ class Jarvis:
         text = self.stt.transcribe(to_wav_bytes(audio))
         return text, time.perf_counter() - start
 
-    def handle_groq_error(self, e: groq.APIError) -> None:
-        if self.convo.history and self.convo.history[-1]["role"] == "user":
-            self.convo.history.pop()
-        self.console.print(f"\n[red]{groq_error_message(e)}[/red]")
+    def say(self, text: str) -> None:
+        """Speak a fixed line (not from the LLM)."""
+        if self.speaker and not self.muted:
+            self.speaker.say(text)
 
-    # --- brain + mouth (shared by both modes) -------------------------------------
+    def announce(self, message: str) -> None:
+        """Called from timer threads: grab attention, then speak."""
+        self.console.print(f"\n[bold yellow]⏰ {message}[/bold yellow]")
+        if self.speaker and not self.muted:
+            self.speaker.play(earcons.listening(self.speaker.tts.sample_rate))
+            self.speaker.say(f"{self.s.user_name.capitalize()}, {message[0].lower()}{message[1:]}")
+
+    # --- confirmation -------------------------------------------------------------------
+
+    def confirm_typed(self, question: str) -> bool:
+        if self.speaker and not self.muted:
+            self.speaker.wait()
+            self.say(question)
+        answer = self.console.input(f"\n[bold yellow]? {question}[/bold yellow] [dim](y/n)[/dim] ")
+        return parse_yes_no(answer) is True
+
+    def confirm_spoken(self, question: str, mic: MicStream, vad) -> bool:
+        self.console.print(f"\n[bold yellow]? {question}[/bold yellow] [dim](say yes or no)[/dim]")
+        if self.speaker and not self.muted:
+            self.speaker.wait()
+            self.say(question)
+            self.speaker.wait()
+        time.sleep(0.15)
+        mic.drain()
+        heard = self._capture(mic, vad, timeout=6.0, announce=False)
+        if heard is None:
+            self.console.print("[dim]  no answer, so I won't.[/dim]")
+            return False
+        text, _ = self.transcribe(heard[0])
+        decision = parse_yes_no(text)
+        self.console.print(f"[bold green]you ›[/bold green] {text} [dim]→ {'yes' if decision else 'no'}[/dim]")
+        return decision is True
+
+    # --- brain + mouth (shared by both modes) -------------------------------------------
 
     def respond(self, text: str, turn_start: float, stages: list[tuple[str, float]] = ()) -> None:
-        """Stream the reply to the screen and speak it sentence by sentence.
+        """Run the agent on `text`: stream the reply to the screen, speak it, run tools.
 
         turn_start: when the user stopped talking/typing (for latency numbers).
         stages: earlier steps to show in the timing line, e.g. [("heard", 0.4)].
         """
+        history_len = len(self.convo.history)
         self.convo.add_user(text)
         speaker = None if self.muted else self.speaker
         splitter = SentenceSplitter()
@@ -114,29 +172,64 @@ class Jarvis:
                     if spoken := clean_for_speech(sentence):
                         speaker.say(spoken)
 
+        # If nothing at all happens for a while (e.g. a web search), say so instead of going silent.
+        filler = threading.Timer(FILLER_AFTER_SECONDS, lambda: speak(["One moment."]))
+        filler.daemon = True
+        if speaker:
+            filler.start()
+
         self.console.print("[bold cyan]jarvis ›[/bold cyan] ", end="")
-        reply, first_token_at = [], None
+        reply: list[str] = []
+        first_token_at = None
+        mid_line = True  # the cursor is on a "jarvis ›" line
+        line_has_text = False  # ...and reply text has been printed on it
         try:
-            for chunk in self.llm.stream(self.convo.messages()):
-                if first_token_at is None:
-                    first_token_at = time.perf_counter()
-                reply.append(chunk)
-                self.console.print(chunk, end="", markup=False, highlight=False)
-                speak(splitter.feed(chunk))
+            for event in self.agent.run(self.convo, lambda q: self.confirm(q)):
+                filler.cancel()
+                if isinstance(event, TextDelta):
+                    if first_token_at is None:
+                        first_token_at = time.perf_counter()
+                    if not mid_line:
+                        self.console.print("[bold cyan]jarvis ›[/bold cyan] ", end="")
+                        mid_line = True
+                    reply.append(event.text)
+                    line_has_text = True
+                    self.console.print(event.text, end="", markup=False, highlight=False)
+                    speak(splitter.feed(event.text))
+                elif isinstance(event, ToolStarted):
+                    speak(splitter.flush())
+                    if line_has_text:
+                        self.console.print()
+                    self.console.print(
+                        f"[dim]  ⚙ {event.name}({summarize_arguments(event.arguments)})[/dim]", end=""
+                    )
+                elif isinstance(event, ToolFinished):
+                    mark = "[green]✓[/green]" if event.ok else f"[red]✗ {event.output[:120]}[/red]"
+                    self.console.print(f" {mark}")
+                    mid_line = line_has_text = False
             speak(splitter.flush())
-            self.console.print()
+            if mid_line:
+                self.console.print()
             if speaker:
                 speaker.wait()
         except KeyboardInterrupt:
+            filler.cancel()
             if speaker:
                 speaker.stop()
             self.console.print(" [dim](interrupted)[/dim]")
-
-        full = "".join(reply).strip()
-        if full:
-            self.convo.add_assistant(full)
-        else:
-            self.convo.history.pop()  # nothing came back; don't leave a dangling user turn
+            # A turn cut off mid-tool-call would leave the history inconsistent; keep just the gist.
+            self.convo.rollback_to(history_len)
+            self.convo.add_user(text)
+            if partial := "".join(reply).strip():
+                self.convo.add_assistant(partial + " …")
+            else:
+                self.convo.rollback_to(history_len)
+        except groq.APIError:
+            filler.cancel()
+            if speaker:
+                speaker.stop()
+            self.convo.rollback_to(history_len)
+            raise
 
         if self.s.show_timing and first_token_at is not None:
             parts = [f"{label} {secs:.2f}s" for label, secs in stages]
@@ -145,7 +238,7 @@ class Jarvis:
                 parts.append(f"first sound {speaker.first_audio_at - turn_start:.2f}s")
             self.console.print(f"[dim]{' · '.join(parts)}[/dim]")
 
-    # --- hands-free mode --------------------------------------------------------------
+    # --- hands-free mode ----------------------------------------------------------------
 
     def run_handsfree(self) -> None:
         from jarvis.listen.vad import VoiceActivity
@@ -155,6 +248,7 @@ class Jarvis:
         wake = WakeWordDetector(self.s.wake_threshold)
         vad = VoiceActivity()
         mic = MicStream()
+        self.confirm = lambda question: self.confirm_spoken(question, mic, vad)
         self.console.print(HANDSFREE_HELP)
         mic.start()
         try:
@@ -170,9 +264,7 @@ class Jarvis:
             pass
         finally:
             mic.close()
-            self.console.print("\n[cyan]Goodbye.[/cyan]")
-            if self.speaker:
-                self.speaker.close()
+            self._shutdown()
 
     def _chime(self, make) -> None:
         if self.speaker and not self.muted:
@@ -195,32 +287,29 @@ class Jarvis:
             audio, stopped_at, waited = heard
             try:
                 text, stt_seconds = self.transcribe(audio)
-            except groq.APIError as e:
-                self.handle_groq_error(e)
-                return
-            if not text:
-                continue
-            self.console.print(f"[bold green]you ›[/bold green] {text}")
-            if is_sleep_phrase(text):
-                return
-            try:
+                if not text:
+                    continue
+                self.console.print(f"[bold green]you ›[/bold green] {text}")
+                if is_sleep_phrase(text):
+                    return
                 self.respond(text, stopped_at, [("end of turn", waited), ("heard", stt_seconds)])
             except groq.APIError as e:
-                self.handle_groq_error(e)
+                self.console.print(f"\n[red]{groq_error_message(e)}[/red]")
                 return
             # Ignore what the mic picked up while JARVIS was talking (its own voice).
             time.sleep(0.15)
             mic.drain()
             first = False
 
-    def _capture(self, mic: MicStream, vad, timeout: float):
+    def _capture(self, mic: MicStream, vad, timeout: float, announce: bool = True):
         """Collect one utterance. Returns (audio, when user stopped talking, end-of-turn wait) or None."""
         vad.reset()
         collector = UtteranceCollector(
             EndpointConfig(silence_seconds=self.s.silence_seconds, no_speech_timeout=timeout)
         )
-        self.console.print("[bold red]● listening…[/bold red]")
-        speaking_shown = False
+        if announce:
+            self.console.print("[bold red]● listening…[/bold red]")
+        speaking_shown = not announce
         while True:
             frame = mic.read()
             if frame is None:
@@ -240,6 +329,7 @@ class Jarvis:
     def run_ptt(self) -> None:
         self.banner("push-to-talk")
         self.console.print(PTT_HELP)
+        self.confirm = self.confirm_typed
         recorder = Recorder()
 
         while True:
@@ -252,6 +342,9 @@ class Jarvis:
                 break
             if typed == "/help":
                 self.console.print(PTT_HELP)
+                continue
+            if typed == "/tools":
+                self.console.print("[dim]" + ", ".join(self.agent.tools.names()) + "[/dim]")
                 continue
             if typed == "/reset":
                 self.convo.reset()
@@ -290,8 +383,12 @@ class Jarvis:
             except KeyboardInterrupt:
                 self.console.print("[dim](cancelled)[/dim]")
             except groq.APIError as e:
-                self.handle_groq_error(e)
+                self.console.print(f"\n[red]{groq_error_message(e)}[/red]")
 
+        self._shutdown()
+
+    def _shutdown(self) -> None:
+        self.timers.cancel_all()
         self.console.print("\n[cyan]Goodbye.[/cyan]")
         if self.speaker:
             self.speaker.close()

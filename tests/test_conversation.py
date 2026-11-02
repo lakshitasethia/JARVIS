@@ -31,7 +31,16 @@ def test_reset_clears_history():
     assert c.messages() == [{"role": "system", "content": "SYS"}]
 
 
-def test_persona_includes_name_and_date():
-    p = system_prompt("Tony", now=datetime(2026, 11, 2))
+def test_persona_includes_name_date_and_home():
+    p = system_prompt("Tony", "Malibu", now=datetime(2026, 11, 2, 9, 5))
     assert "Tony" in p
-    assert "Monday, 02 November 2026" in p
+    assert "Monday 02 November 2026, 09:05 AM" in p
+    assert "The user's home is Malibu." in p
+    assert "isn't set" in system_prompt("Tony")
+
+
+def test_system_prompt_can_be_dynamic():
+    calls = []
+    c = Conversation(lambda: calls.append(1) or f"SYS{len(calls)}")
+    assert c.messages()[0]["content"] == "SYS1"
+    assert c.messages()[0]["content"] == "SYS2"

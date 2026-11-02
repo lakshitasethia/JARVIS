@@ -3,7 +3,21 @@
 A personal JARVIS-style AI assistant for macOS, built step by step.
 See [research.md](research.md) for the research, architecture, and roadmap.
 
-**Status:** Phase 2: hands-free. Say "Hey Jarvis" → it listens until you stop → thinks (Groq) → answers aloud (Kokoro), then keeps listening for follow-ups.
+**Status:** Phase 3: tools. JARVIS can act: open/quit apps, volume, Spotify/Music, timers, weather, Apple Reminders, web search.
+
+| Ask | Tool |
+|---|---|
+| "What time is it in Tokyo?" | `get_time` |
+| "Open Spotify" / "Quit Safari" *(asks first)* | `open_app`, `quit_app` |
+| "Turn it up a bit" / "Volume to 30" | `set_volume` |
+| "Play" / "Skip this song" | `media_control` (Spotify or Music) |
+| "Set a 10 minute pasta timer" / "How long's left?" / "Cancel it" | `set_timer`, `list_timers`, `cancel_timer` |
+| "Do I need an umbrella tomorrow?" | `get_weather` (Open-Meteo, no key) |
+| "Remind me to call Mum at 6pm" | `create_reminder` (Apple Reminders) |
+| "Who won the match last night?" | web search (Groq built-in) |
+
+Sensitive actions (like quitting an app) ask for a yes/no first. JARVIS enforces that in code, not just in the prompt.
+The first time JARVIS controls an app like Reminders or Spotify, macOS asks you to allow it (Automation permission).
 
 ## Setup
 
@@ -44,9 +58,17 @@ jarvis/
 │   ├── wake.py          "Hey Jarvis" wake word (openWakeWord, local)
 │   ├── vad.py           voice activity detection (Silero, local)
 │   ├── endpoint.py      decides when you started / finished talking
-│   └── stt.py           speech-to-text (Groq Whisper)
+│   ├── stt.py           speech-to-text (Groq Whisper)
+│   └── yesno.py         understands yes/no answers to confirmations
+├── tools/
+│   ├── registry.py      Tool definition, registry, confirmation enforcement
+│   ├── system.py        time, open/quit apps, volume, music
+│   ├── timers.py        spoken countdown timers
+│   ├── weather.py       Open-Meteo weather
+│   └── reminders.py     Apple Reminders
 ├── brain/
-│   ├── llm.py           LLM interface + Groq implementation
+│   ├── agent.py         agent loop: think → use tools → answer; retries & safeguards
+│   ├── llm.py           LLM interface + Groq implementation (tool calls, rate limits)
 │   ├── persona.py       JARVIS system prompt
 │   └── conversation.py  session chat history
 └── speak/
