@@ -1,0 +1,30 @@
+[project]
+name = "jarvis"
+version = "0.1.0"
+description = "A personal JARVIS-style AI voice assistant for macOS"
+readme = "README.md"
+authors = [
+    { name = "lakshitasethia", email = "ksethia1978@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "groq>=1.7.0",
+    "python-dotenv>=1.2.4",
+    "rich>=15.0.0",
+]
+
+[project.scripts]
+jarvis = "jarvis.main:main"
+
+[build-system]
+requires = ["uv_build>=0.12.17,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
+
+
+[tool.uv.build-backend]
+module-root = ""
