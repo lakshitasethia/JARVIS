@@ -216,8 +216,8 @@ Each phase ends with something that **works and can be demoed**.
 
 | Phase | Build | Done when… |
 |---|---|---|
-| **0. Foundation** | `uv` project, config/.env, logging, Claude API key, text chat with JARVIS persona + streaming | You can type to JARVIS in the terminal and it replies in character |
-| **1. Voice I/O (push-to-talk)** | Mic capture, STT (Parakeet MLX), TTS (`say` → Kokoro), sentence streaming. Measure latency per stage. | Hold a key, speak, and hear JARVIS answer |
+| **0. Foundation** ✅ | `uv` project, config/.env, logging, Claude API key, text chat with JARVIS persona + streaming | You can type to JARVIS in the terminal and it replies in character |
+| **1. Voice I/O (push-to-talk)** ✅ | Mic capture, STT (Groq Whisper turbo), TTS (Kokoro int8, local; `say` fallback), sentence streaming. Measure latency per stage. | Hold a key, speak, and hear JARVIS answer |
 | **2. Hands-free** | openWakeWord "hey jarvis", Silero VAD end-of-speech, follow-up window (keep listening ~8 s after a reply) | "Hey Jarvis, what time is it?" works with no keyboard |
 | **3. Tools** | Agent loop + native tools (time, weather, web search, open apps, volume, timers, macOS reminders/notes) + permission tiers + confirmation | "Open Spotify and set a 10-minute timer" works |
 | **4. Natural conversation** | Barge-in (interrupt while speaking), smart turn detection, latency tuning | You can cut JARVIS off mid-sentence and it stops |

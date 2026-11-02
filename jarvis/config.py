@@ -11,11 +11,20 @@ load_dotenv()
 @dataclass(frozen=True)
 class Settings:
     groq_api_key: str
+    # Brain
     model: str
     reasoning_effort: str
     user_name: str
     max_history_messages: int
     show_timing: bool
+    # Ears
+    stt_model: str
+    # Voice
+    tts_engine: str  # kokoro | say | none
+    voice: str
+    speech_speed: float
+    kokoro_model_path: str
+    kokoro_voices_path: str
 
 
 def load_settings() -> Settings:
@@ -34,4 +43,10 @@ def load_settings() -> Settings:
         user_name=os.getenv("JARVIS_USER_NAME", "sir"),
         max_history_messages=int(os.getenv("JARVIS_MAX_HISTORY", "20")),
         show_timing=os.getenv("JARVIS_SHOW_TIMING", "true").lower() == "true",
+        stt_model=os.getenv("JARVIS_STT_MODEL", "whisper-large-v3-turbo"),
+        tts_engine=os.getenv("JARVIS_TTS", "kokoro").lower(),
+        voice=os.getenv("JARVIS_VOICE", "bm_george"),
+        speech_speed=float(os.getenv("JARVIS_SPEECH_SPEED", "1.0")),
+        kokoro_model_path=os.getenv("JARVIS_KOKORO_MODEL", "models/kokoro-v1.0.int8.onnx"),
+        kokoro_voices_path=os.getenv("JARVIS_KOKORO_VOICES", "models/voices-v1.0.bin"),
     )
