@@ -224,7 +224,7 @@ Each phase ends with something that **works and can be demoed**.
 | **5. Memory** | SQLite memory + remember/recall tools, user profile injected into the prompt | "Remember I like my coffee black" persists across restarts |
 | **6. MCP integrations** | MCP client; connect calendar, email, files, browser (Playwright), GitHub | "What's on my calendar tomorrow?" / "Summarize my unread email" |
 | **7. Proactivity** | Scheduler: morning briefing, reminders, alerts | JARVIS speaks first: "Good morning. You have three meetings today…" |
-| **8. Vision & polish** | Screen/camera understanding, menu-bar app UI, launch at login, local LLM offline mode | Feels like a product |
+| **8. Vision & polish** (launch at login pulled forward: `jarvis-service`) | Screen/camera understanding, menu-bar app UI, launch at login, local LLM offline mode | Feels like a product |
 
 Stretch: smart-home via Home Assistant MCP, custom wake word "Jarvis" (no "hey"), custom voice, phone access via Telegram/iMessage channel, speech-to-speech mode.
 

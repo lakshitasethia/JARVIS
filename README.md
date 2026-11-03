@@ -41,6 +41,23 @@ Commands: `/mute`, `/reset`, `/help`, `/quit`.
 
 The first time you talk, macOS will ask to give your terminal app microphone access. Allow it.
 
+## Always on (no terminal)
+
+Run JARVIS in the background so it starts when you log in. Just say "Hey Jarvis" from anywhere:
+
+```bash
+uv run jarvis-service install     # builds ~/Applications/JARVIS.app and adds it to login
+```
+
+macOS will ask **"JARVIS would like to access the microphone"**. Click **Allow**, then run
+`uv run jarvis-service restart`. Other commands: `status`, `logs` (`-f` to follow), `stop`, `start`,
+`restart` (after changing `.env` or the code), `uninstall`.
+
+- No Dock icon or window. The orange mic dot in the menu bar shows it's listening.
+- Only one JARVIS listens at a time. To type to it while the service runs: `uv run jarvis --ptt`.
+- If the mic or speaker stops working (sleep, unplugging headphones), JARVIS restarts itself.
+- Output goes to `logs/service.log`.
+
 ## Tests
 
 ```bash
@@ -76,6 +93,8 @@ jarvis/
 │   ├── llm.py           LLM interface + Groq implementation (tool calls, rate limits)
 │   ├── persona.py       JARVIS system prompt
 │   └── conversation.py  session chat history
+├── service.py           background service: JARVIS.app + login item (jarvis-service)
+├── service_launcher.c   tiny app launcher so macOS permissions are granted to "JARVIS"
 └── speak/
     ├── sentences.py     split streaming text into sentences
     ├── tts.py           text-to-speech (Kokoro, macOS say)

@@ -2,6 +2,7 @@
 
 import queue
 import threading
+import time
 from collections.abc import Callable
 
 import numpy as np
@@ -36,6 +37,7 @@ class MicStream:
             callback=self._callback,
         )
         self._worker = threading.Thread(target=self._process_loop, daemon=True) if processor else None
+        self._last_frame_at = time.monotonic()
 
     def _callback(self, indata, frames, time_info, status) -> None:
         (self._raw if self._processor else self._out).put(indata[:, 0].copy())
@@ -45,6 +47,7 @@ class MicStream:
             self._out.put(self._processor(frame))
 
     def start(self) -> None:
+        self._last_frame_at = time.monotonic()
         if self._worker:
             self._worker.start()
         self._stream.start()
@@ -58,14 +61,21 @@ class MicStream:
     def read(self, timeout: float = 0.5) -> np.ndarray | None:
         """Next 80 ms frame, or None if nothing arrived within `timeout`."""
         try:
-            return self._out.get(timeout=timeout)
+            frame = self._out.get(timeout=timeout)
         except queue.Empty:
             return None
+        self._last_frame_at = time.monotonic()
+        return frame
+
+    def stalled(self, seconds: float = 5.0) -> bool:
+        """True if no audio has arrived for a while (device unplugged, Mac woke from sleep…)."""
+        return time.monotonic() - self._last_frame_at > seconds
 
     def drain(self) -> None:
         """Throw away buffered audio (e.g. what the mic picked up while JARVIS was talking)."""
         while True:
             try:
                 self._out.get_nowait()
+                self._last_frame_at = time.monotonic()
             except queue.Empty:
                 return

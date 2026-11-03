@@ -20,6 +20,7 @@ dependencies = [
 
 [project.scripts]
 jarvis = "jarvis.main:main"
+jarvis-service = "jarvis.service:main"
 
 [build-system]
 requires = ["uv_build>=0.12.17,<0.13.0"]

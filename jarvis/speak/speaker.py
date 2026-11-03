@@ -26,6 +26,7 @@ class Speaker:
         # Called with every block just before it's played (feeds the echo canceller).
         self.on_play: Callable[[np.ndarray], None] | None = None
         self.volume = 1.0  # target loudness; changes are ramped over one block (no clicks)
+        self.broken = False  # the audio device failed (e.g. unplugged); JARVIS should restart
         self._current_volume = 1.0
         self._gap = np.zeros(int(_GAP_SECONDS * tts.sample_rate), dtype=np.float32)
         self._out = sd.OutputStream(samplerate=tts.sample_rate, channels=1, dtype="float32", latency="low")
@@ -122,5 +123,9 @@ class Speaker:
                     self._write(audio[i : i + _BLOCK])
                 else:
                     self._write(self._gap)
+            except Exception as e:  # sounddevice.PortAudioError etc.
+                if not self.broken:
+                    print(f"\n[audio output failed: {e}]")
+                self.broken = True
             finally:
                 self._done_one()

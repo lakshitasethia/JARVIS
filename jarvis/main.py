@@ -5,9 +5,13 @@
 """
 
 import argparse
+import fcntl
 import re
+import signal
+import sys
 import threading
 import time
+from pathlib import Path
 
 import groq
 from rich.console import Console
@@ -53,6 +57,13 @@ SLEEP_PHRASES = {
 
 class BargeIn(Exception):
     """The user started talking while JARVIS was responding."""
+
+
+class AudioDeviceLost(Exception):
+    """Mic or speaker stopped working; restarting the process gets fresh audio streams."""
+
+
+EXIT_RESTART = 75  # exit code that tells the background service to start JARVIS again
 
 
 def is_just_wake_word(text: str) -> bool:
@@ -308,6 +319,7 @@ class Jarvis:
         self.confirm = lambda question: self.confirm_spoken(question, mic, vad)
         self.console.print(HANDSFREE_HELP)
         mic.start()
+        lost: AudioDeviceLost | None = None
         try:
             while True:
                 self.console.print("\n[dim]💤 sleeping, say \"Hey Jarvis\"[/dim]")
@@ -319,9 +331,15 @@ class Jarvis:
                 mic.drain()
         except KeyboardInterrupt:
             pass
+        except AudioDeviceLost as e:
+            lost = e
+            log.event("audio_device_lost", reason=str(e))
+            self.console.print(f"\n[yellow]Audio problem ({e}). Restarting to recover…[/yellow]")
         finally:
             mic.close()
             self._shutdown()
+        if lost:
+            sys.exit(EXIT_RESTART)  # the background service starts us again with fresh audio
 
     def _chime(self, make) -> None:
         if self.speaker and not self.muted:
@@ -330,7 +348,13 @@ class Jarvis:
     def _wait_for_wake(self, mic: MicStream, wake) -> None:
         while True:
             frame = mic.read()
-            if frame is not None and wake.detected(frame):
+            if frame is None:
+                if mic.stalled():
+                    raise AudioDeviceLost("no audio from the microphone")
+                continue
+            if wake.detected(frame):
+                if self.speaker and self.speaker.broken:
+                    raise AudioDeviceLost("the speaker stopped working")
                 return
 
     def _conversation(self, mic: MicStream, vad) -> None:
@@ -412,6 +436,8 @@ class Jarvis:
         while True:
             frame = mic.read()
             if frame is None:
+                if mic.stalled():
+                    raise AudioDeviceLost("no audio from the microphone")
                 continue
             status = collector.add(frame, vad.speech_probability(frame))
             if status is Status.SPEAKING and not speaking_shown:
@@ -493,11 +519,40 @@ class Jarvis:
             self.speaker.close()
 
 
+def _stop_on_sigterm(signum, frame) -> None:
+    raise KeyboardInterrupt
+
+
+_lock_file = None
+
+
+LISTENING_LOCK = Path(__file__).resolve().parent.parent / "logs" / ".listening.lock"
+
+
+def _hold_single_listener_lock(path: Path = LISTENING_LOCK) -> None:
+    """Only one JARVIS may listen at a time, or you'd get two answers to every question."""
+    global _lock_file
+    path.parent.mkdir(exist_ok=True)
+    _lock_file = open(path, "w")
+    try:
+        fcntl.flock(_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit(
+            "JARVIS is already listening (probably the background service).\n"
+            "  • Just say “Hey Jarvis”, or\n"
+            "  • stop the background one first: uv run jarvis-service stop, or\n"
+            "  • type to it alongside: uv run jarvis --ptt"
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="jarvis", description="Your personal JARVIS.")
     parser.add_argument("--ptt", action="store_true", help="push-to-talk / typing mode instead of hands-free")
     args = parser.parse_args()
+    signal.signal(signal.SIGTERM, _stop_on_sigterm)  # e.g. `jarvis-service stop`
     settings = load_settings()
+    if not args.ptt:
+        _hold_single_listener_lock()
     if settings.log_sessions:
         log.start()
     jarvis = Jarvis(settings, Console())
