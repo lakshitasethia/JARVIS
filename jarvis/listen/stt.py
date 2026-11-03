@@ -1,8 +1,25 @@
 """Speech-to-text. Every engine implements `STT`."""
 
+import re
 from typing import Protocol
 
 from groq import Groq
+
+# Phrases Whisper is known to invent from silence/noise (learned from YouTube subtitles).
+# Nobody says these to an assistant, so they're always dropped.
+_HALLUCINATIONS = {
+    "thanks for watching", "thank you for watching", "thanks for watching and see you next time",
+    "please subscribe", "like and subscribe", "subtitles by the amaraorg community",
+    "transcribed by", "you",
+}
+
+
+def is_junk_transcript(text: str) -> bool:
+    """True for transcripts that aren't real speech: '...', '.', '♪', known Whisper hallucinations."""
+    letters = re.sub(r"[^a-z ]", "", text.lower())
+    if len(letters.replace(" ", "")) < 2:
+        return True
+    return " ".join(letters.split()) in _HALLUCINATIONS
 
 
 class STT(Protocol):

@@ -3,7 +3,7 @@
 A personal JARVIS-style AI assistant for macOS, built step by step.
 See [research.md](research.md) for the research, architecture, and roadmap.
 
-**Status:** Phase 3: tools. JARVIS can act: open/quit apps, volume, Spotify/Music, timers, weather, Apple Reminders, web search.
+**Status:** Phase 4: natural conversation. Talk over JARVIS to interrupt it (echo-cancelled, works on laptop speakers). Earlier: Phase 3, tools. JARVIS can act: open/quit apps, volume, Spotify/Music, timers, weather, Apple Reminders, web search.
 
 | Ask | Tool |
 |---|---|
@@ -32,7 +32,9 @@ uv run jarvis
 
 **Hands-free (default):** say **"Hey Jarvis"**, wait for the chime, and talk. JARVIS notices when you stop.
 After it answers, just keep talking for follow-ups. Stay quiet (or say "never mind") and it goes back to sleep.
-**Ctrl+C** stops JARVIS mid-sentence; Ctrl+C while it's idle quits.
+**Interrupt by talking:** just start speaking while JARVIS talks: it stops within ~0.3 s and listens
+("Stop, what's the capital of France?"). Ctrl+C also stops it; Ctrl+C while idle quits.
+Session logs go to `logs/` (git-ignored) so odd behaviour can be diagnosed.
 
 **Push-to-talk / typing:** `uv run jarvis --ptt`, then press Enter on an empty line to talk (Enter again to stop), or type.
 Commands: `/mute`, `/reset`, `/help`, `/quit`.
@@ -51,13 +53,16 @@ uv run pytest
 jarvis/
 ├── config.py            settings from .env
 ├── main.py              main loop: listen → think → speak
+├── log.py               session log (logs/*.jsonl)
 ├── audio/
-│   ├── mic.py           always-on mic stream (80 ms frames)
+│   ├── echo.py          echo cancellation (WebRTC AEC3): removes JARVIS's voice from the mic
+│   ├── mic.py           always-on mic stream (80 ms frames) + processing thread
 │   └── recorder.py      push-to-talk capture
 ├── listen/
 │   ├── wake.py          "Hey Jarvis" wake word (openWakeWord, local)
 │   ├── vad.py           voice activity detection (Silero, local)
 │   ├── endpoint.py      decides when you started / finished talking
+│   ├── bargein.py       notices you talking over JARVIS
 │   ├── stt.py           speech-to-text (Groq Whisper)
 │   └── yesno.py         understands yes/no answers to confirmations
 ├── tools/

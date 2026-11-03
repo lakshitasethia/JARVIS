@@ -220,7 +220,7 @@ Each phase ends with something that **works and can be demoed**.
 | **1. Voice I/O (push-to-talk)** ✅ | Mic capture, STT (Groq Whisper turbo), TTS (Kokoro int8, local; `say` fallback), sentence streaming. Measure latency per stage. | Hold a key, speak, and hear JARVIS answer |
 | **2. Hands-free** ✅ | openWakeWord "hey jarvis", Silero VAD end-of-speech, follow-up window (keep listening ~8 s after a reply) | "Hey Jarvis, what time is it?" works with no keyboard |
 | **3. Tools** ✅ | Agent loop + native tools (time, weather, web search, open apps, volume, timers, macOS reminders/notes) + permission tiers + confirmation | "Open Spotify and set a 10-minute timer" works |
-| **4. Natural conversation** | Barge-in (interrupt while speaking), smart turn detection, latency tuning | You can cut JARVIS off mid-sentence and it stops |
+| **4. Natural conversation** ✅ | Barge-in (interrupt while speaking), smart turn detection, latency tuning | You can cut JARVIS off mid-sentence and it stops |
 | **5. Memory** | SQLite memory + remember/recall tools, user profile injected into the prompt | "Remember I like my coffee black" persists across restarts |
 | **6. MCP integrations** | MCP client; connect calendar, email, files, browser (Playwright), GitHub | "What's on my calendar tomorrow?" / "Summarize my unread email" |
 | **7. Proactivity** | Scheduler: morning briefing, reminders, alerts | JARVIS speaks first: "Good morning. You have three meetings today…" |
@@ -263,6 +263,11 @@ Llama 3.x models were removed from free/Developer accounts on 16 Aug 2026 (enter
 - After a tool call it sometimes writes the answer twice, glued together ("…breeze.London is…"). `RepeatGuard` stops at the seam.
 - It occasionally invents a tool name (`get_volume`); Groq rejects the call. We retry once, then apologise rather than go silent.
 - Web-search answers carry citation markers like 【1†L9-L17】 and narrow no-break spaces; stripped before display/speech.
+
+**Phase 4 findings:**
+- Barge-in on laptop speakers needs echo cancellation: in simulation, plain VAD flagged JARVIS's own echo as speech in 25/25 frames; with WebRTC AEC3 (via the `livekit` package) 0/25, while still catching a person talking over it (14/22 frames). Cost: ~0.5% CPU.
+- Whisper turns noise into "..."; gpt-oss can then spiral into junk output. Junk transcripts are dropped, punctuation-only lines are never spoken, and degenerate replies are cut off and retried.
+- Deferred: model-based turn detection (Pipecat Smart Turn). End-of-turn is still a fixed 0.8 s of silence.
 
 **Updated stack:**
 `openWakeWord (local) → Silero VAD (local) → Groq Whisper turbo (cloud) → Groq gpt-oss-120b (cloud) → Kokoro (local)`.

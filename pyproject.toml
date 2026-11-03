@@ -10,6 +10,7 @@ requires-python = ">=3.12"
 dependencies = [
     "groq>=1.7.0",
     "kokoro-onnx>=0.6.1",
+    "livekit>=1.2.0",
     "numpy>=2.5.4",
     "openwakeword>=0.4.0",
     "python-dotenv>=1.2.4",

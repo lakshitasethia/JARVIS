@@ -3,13 +3,14 @@
 import queue
 import threading
 import time
+from collections.abc import Callable
 
 import numpy as np
 import sounddevice as sd
 
 from jarvis.speak.tts import TTS
 
-_BLOCK = 2_400  # 0.1 s at 24 kHz, so stop() takes effect within ~0.1 s
+_BLOCK = 480  # 20 ms at 24 kHz: stop() is near-instant and the echo reference stays fine-grained
 _GAP_SECONDS = 0.12  # small breath between sentences
 
 
@@ -22,8 +23,12 @@ class Speaker:
         self._pending = 0
         self._lock = threading.Lock()
         self.first_audio_at: float | None = None
+        # Called with every block just before it's played (feeds the echo canceller).
+        self.on_play: Callable[[np.ndarray], None] | None = None
+        self.volume = 1.0  # target loudness; changes are ramped over one block (no clicks)
+        self._current_volume = 1.0
         self._gap = np.zeros(int(_GAP_SECONDS * tts.sample_rate), dtype=np.float32)
-        self._out = sd.OutputStream(samplerate=tts.sample_rate, channels=1, dtype="float32")
+        self._out = sd.OutputStream(samplerate=tts.sample_rate, channels=1, dtype="float32", latency="low")
         self._out.start()
         threading.Thread(target=self._synth_loop, daemon=True).start()
         threading.Thread(target=self._play_loop, daemon=True).start()
@@ -43,6 +48,7 @@ class Speaker:
 
     def begin_turn(self) -> None:
         self.first_audio_at = None
+        self.volume = 1.0
 
     def stop(self) -> None:
         """Silence immediately and discard anything queued."""
@@ -86,6 +92,24 @@ class Speaker:
                 continue
             self._audio_q.put((gen, audio))
 
+    def duck(self, level: float = 0.25) -> None:
+        """Lower the voice (e.g. the user might be starting to talk)."""
+        self.volume = level
+
+    def unduck(self) -> None:
+        self.volume = 1.0
+
+    def _write(self, block: np.ndarray) -> None:
+        target = self.volume
+        if target != self._current_volume:
+            block = block * np.linspace(self._current_volume, target, len(block), dtype=np.float32)
+            self._current_volume = target
+        elif target != 1.0:
+            block = block * target
+        if self.on_play is not None:
+            self.on_play(block)
+        self._out.write(block)
+
     def _play_loop(self) -> None:
         while True:
             gen, audio = self._audio_q.get()
@@ -95,8 +119,8 @@ class Speaker:
                         break
                     if self.first_audio_at is None:
                         self.first_audio_at = time.perf_counter()
-                    self._out.write(audio[i : i + _BLOCK])
+                    self._write(audio[i : i + _BLOCK])
                 else:
-                    self._out.write(self._gap)
+                    self._write(self._gap)
             finally:
                 self._done_one()

@@ -73,3 +73,18 @@ def test_stop_discards_queued_sentences(fake_stream):
     sp.say("one")  # still usable afterwards
     sp.wait()
     assert played_values(sp) == [0.1]
+
+
+def test_ducking_lowers_volume_smoothly(fake_stream):
+    sp = Speaker(FakeTTS())
+    sp.duck(0.25)
+    sp.say("one")  # constant 0.1 signal
+    sp.wait()
+    blocks = [b for b in sp._out.written if len(b) and b.max() > 0]
+    first = blocks[0]
+    assert abs(first[0] - 0.1) < 1e-3 and abs(first[-1] - 0.025) < 1e-3  # ramped, no click
+    assert all(abs(b.max() - 0.025) < 1e-3 for b in blocks[1:])  # then held low
+    sp.unduck()
+    sp.say("one")
+    sp.wait()
+    assert abs(sp._out.written[-2].max() - 0.1) < 1e-3  # back to full (last block is the gap)

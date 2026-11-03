@@ -12,6 +12,8 @@ import time
 import groq
 from rich.console import Console
 
+from jarvis import log
+from jarvis.audio.echo import EchoCanceller, EchoReference
 from jarvis.audio.mic import MicStream
 from jarvis.audio.recorder import Recorder, duration, peak_level, to_wav_bytes
 from jarvis.brain.agent import Agent, TextDelta, ToolFinished, ToolStarted, summarize_arguments
@@ -19,8 +21,9 @@ from jarvis.brain.conversation import Conversation
 from jarvis.brain.llm import GroqLLM
 from jarvis.brain.persona import system_prompt
 from jarvis.config import Settings, load_settings
+from jarvis.listen.bargein import BargeInMonitor
 from jarvis.listen.endpoint import EndpointConfig, Status, UtteranceCollector
-from jarvis.listen.stt import GroqSTT
+from jarvis.listen.stt import GroqSTT, is_junk_transcript
 from jarvis.listen.yesno import parse_yes_no
 from jarvis.speak import earcons
 from jarvis.speak.sentences import SentenceSplitter, clean_for_speech
@@ -41,7 +44,20 @@ HANDSFREE_HELP = (
 MIN_SECONDS = 0.4
 MIN_PEAK = 300  # below this a push-to-talk recording is effectively silent
 FILLER_AFTER_SECONDS = 2.0  # say "One moment." if nothing has happened by then
-SLEEP_PHRASES = {"never mind", "nevermind", "go to sleep", "stop", "cancel", "that's all", "that is all", "nothing"}
+SLEEP_PHRASES = {
+    "never mind", "nevermind", "go to sleep", "stop", "cancel", "that's all", "that is all", "nothing",
+    "goodbye", "good bye", "bye", "bye bye", "okay goodbye", "ok goodbye", "thanks goodbye",
+    "thank you goodbye", "that's it", "that'll be all", "that will be all",
+}
+
+
+class BargeIn(Exception):
+    """The user started talking while JARVIS was responding."""
+
+
+def is_just_wake_word(text: str) -> bool:
+    """'Hey Jarvis' on its own mid-conversation: the user re-woke it; nothing to answer."""
+    return re.sub(r"[^a-z ]", "", text.lower()).strip() in {"jarvis", "hey jarvis", "ok jarvis", "okay jarvis"}
 
 
 def is_sleep_phrase(text: str) -> bool:
@@ -97,6 +113,7 @@ class Jarvis:
         )
         # How to ask the user yes/no; each mode installs its own.
         self.confirm = self.confirm_typed
+        self._monitor: BargeInMonitor | None = None  # active while responding hands-free
 
     def banner(self, mode: str) -> None:
         voice = self.s.tts_engine if self.speaker else "none"
@@ -111,7 +128,10 @@ class Jarvis:
     def transcribe(self, audio) -> tuple[str, float]:
         start = time.perf_counter()
         text = self.stt.transcribe(to_wav_bytes(audio))
-        return text, time.perf_counter() - start
+        seconds = time.perf_counter() - start
+        junk = is_junk_transcript(text)
+        log.event("transcript", text=text, audio_seconds=round(len(audio) / 16_000, 2), junk=junk)
+        return ("" if junk else text), seconds
 
     def say(self, text: str) -> None:
         """Speak a fixed line (not from the LLM)."""
@@ -135,6 +155,16 @@ class Jarvis:
         return parse_yes_no(answer) is True
 
     def confirm_spoken(self, question: str, mic: MicStream, vad) -> bool:
+        monitor = self._monitor
+        if monitor:
+            monitor.pause()
+        try:
+            return self._ask_spoken(question, mic, vad)
+        finally:
+            if monitor:
+                monitor.resume()
+
+    def _ask_spoken(self, question: str, mic: MicStream, vad) -> bool:
         self.console.print(f"\n[bold yellow]? {question}[/bold yellow] [dim](say yes or no)[/dim]")
         if self.speaker and not self.muted:
             self.speaker.wait()
@@ -153,13 +183,22 @@ class Jarvis:
 
     # --- brain + mouth (shared by both modes) -------------------------------------------
 
-    def respond(self, text: str, turn_start: float, stages: list[tuple[str, float]] = ()) -> None:
+    def respond(
+        self,
+        text: str,
+        turn_start: float,
+        stages: list[tuple[str, float]] = (),
+        interrupt: threading.Event | None = None,
+    ) -> bool:
         """Run the agent on `text`: stream the reply to the screen, speak it, run tools.
 
         turn_start: when the user stopped talking/typing (for latency numbers).
         stages: earlier steps to show in the timing line, e.g. [("heard", 0.4)].
+        interrupt: set by the barge-in monitor when the user starts talking over JARVIS.
+        Returns True if the user cut in before JARVIS said anything (they were still talking).
         """
         history_len = len(self.convo.history)
+        log.event("user", text=text)
         self.convo.add_user(text)
         speaker = None if self.muted else self.speaker
         splitter = SentenceSplitter()
@@ -185,6 +224,8 @@ class Jarvis:
         line_has_text = False  # ...and reply text has been printed on it
         try:
             for event in self.agent.run(self.convo, lambda q: self.confirm(q)):
+                if interrupt is not None and interrupt.is_set():
+                    raise BargeIn
                 filler.cancel()
                 if isinstance(event, TextDelta):
                     if first_token_at is None:
@@ -211,20 +252,27 @@ class Jarvis:
             if mid_line:
                 self.console.print()
             if speaker:
-                speaker.wait()
-        except KeyboardInterrupt:
+                while speaker.is_speaking():
+                    if interrupt is not None and interrupt.is_set():
+                        raise BargeIn
+                    time.sleep(0.03)
+        except (KeyboardInterrupt, BargeIn) as e:
             filler.cancel()
             if speaker:
                 speaker.stop()
-            self.console.print(" [dim](interrupted)[/dim]")
+            cut_in = isinstance(e, BargeIn)
+            self.console.print(" [dim](you cut in)[/dim]" if cut_in else " [dim](interrupted)[/dim]")
+            log.event("interrupted", by="voice" if cut_in else "ctrl-c", partial="".join(reply))
             # A turn cut off mid-tool-call would leave the history inconsistent; keep just the gist.
             self.convo.rollback_to(history_len)
             self.convo.add_user(text)
             if partial := "".join(reply).strip():
-                self.convo.add_assistant(partial + " …")
+                self.convo.add_assistant(partial)
             else:
                 self.convo.rollback_to(history_len)
-        except groq.APIError:
+                return cut_in
+        except groq.APIError as e:
+            log.event("error", where="respond", error=repr(e))
             filler.cancel()
             if speaker:
                 speaker.stop()
@@ -237,6 +285,7 @@ class Jarvis:
             if speaker and speaker.first_audio_at:
                 parts.append(f"first sound {speaker.first_audio_at - turn_start:.2f}s")
             self.console.print(f"[dim]{' · '.join(parts)}[/dim]")
+        return False
 
     # --- hands-free mode ----------------------------------------------------------------
 
@@ -247,7 +296,15 @@ class Jarvis:
         self.banner("hands-free")
         wake = WakeWordDetector(self.s.wake_threshold)
         vad = VoiceActivity()
-        mic = MicStream()
+        processor = None
+        if self.speaker and self.s.echo_cancel:
+            reference = EchoReference(self.speaker.tts.sample_rate)
+            self.speaker.on_play = reference.push
+            processor = EchoCanceller(reference).process
+        mic = MicStream(processor=processor)
+        if self.s.barge_in and self.speaker:
+            how = "talk over JARVIS to interrupt" if processor else "barge-in without echo cancellation: use headphones"
+            self.console.print(f"[dim]Echo cancellation {'on' if processor else 'off'} · {how}[/dim]")
         self.confirm = lambda question: self.confirm_spoken(question, mic, vad)
         self.console.print(HANDSFREE_HELP)
         mic.start()
@@ -279,9 +336,12 @@ class Jarvis:
     def _conversation(self, mic: MicStream, vad) -> None:
         """One wake-up: listen, answer, then keep listening for follow-ups until quiet."""
         first = True
+        pending: list = []  # audio from a barge-in: the start of the user's next utterance
+        unfinished = ""  # user text that was cut off by their own barge-in before JARVIS replied
         while True:
             timeout = self.s.listen_timeout if first else self.s.followup_seconds
-            heard = self._capture(mic, vad, timeout)
+            heard = self._capture(mic, vad, timeout, prefill=pending)
+            pending = []
             if heard is None:
                 return
             audio, stopped_at, waited = heard
@@ -289,24 +349,63 @@ class Jarvis:
                 text, stt_seconds = self.transcribe(audio)
                 if not text:
                     continue
+                if unfinished:
+                    text, unfinished = f"{unfinished} {text}", ""
                 self.console.print(f"[bold green]you ›[/bold green] {text}")
                 if is_sleep_phrase(text):
                     return
-                self.respond(text, stopped_at, [("end of turn", waited), ("heard", stt_seconds)])
+                if is_just_wake_word(text):
+                    self._chime(earcons.listening)  # "I'm still here, go on"
+                    continue
+                monitor = self._start_monitor(mic, vad)
+                try:
+                    still_talking = self.respond(
+                        text,
+                        stopped_at,
+                        [("end of turn", waited), ("heard", stt_seconds)],
+                        interrupt=monitor.triggered if monitor else None,
+                    )
+                finally:
+                    if monitor:
+                        pending = monitor.stop()
+                        self._monitor = None
+                if still_talking:
+                    unfinished = text  # they'd only paused; merge with what comes next
             except groq.APIError as e:
                 self.console.print(f"\n[red]{groq_error_message(e)}[/red]")
                 return
-            # Ignore what the mic picked up while JARVIS was talking (its own voice).
-            time.sleep(0.15)
-            mic.drain()
+            if not pending:
+                # Ignore what the mic picked up while JARVIS was talking (its own voice).
+                time.sleep(0.15)
+                mic.drain()
             first = False
 
-    def _capture(self, mic: MicStream, vad, timeout: float, announce: bool = True):
-        """Collect one utterance. Returns (audio, when user stopped talking, end-of-turn wait) or None."""
-        vad.reset()
+    def _start_monitor(self, mic: MicStream, vad) -> BargeInMonitor | None:
+        if not (self.s.barge_in and self.speaker and not self.muted):
+            return None
+
+        def on_barge_in() -> None:
+            self.speaker.stop()
+            self.speaker.unduck()
+
+        self._monitor = BargeInMonitor(
+            mic, vad, on_barge_in, on_maybe=self.speaker.duck, on_clear=self.speaker.unduck
+        ).start()
+        return self._monitor
+
+    def _capture(self, mic: MicStream, vad, timeout: float, announce: bool = True, prefill: list = ()):
+        """Collect one utterance. Returns (audio, when user stopped talking, end-of-turn wait) or None.
+
+        prefill: (frame, speech probability) pairs already heard, e.g. by the barge-in monitor.
+        """
         collector = UtteranceCollector(
             EndpointConfig(silence_seconds=self.s.silence_seconds, no_speech_timeout=timeout)
         )
+        if prefill:
+            for frame, prob in prefill:  # VAD state carries on from the monitor; don't reset it
+                collector.add(frame, prob)
+        else:
+            vad.reset()
         if announce:
             self.console.print("[bold red]● listening…[/bold red]")
         speaking_shown = not announce
@@ -398,7 +497,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="jarvis", description="Your personal JARVIS.")
     parser.add_argument("--ptt", action="store_true", help="push-to-talk / typing mode instead of hands-free")
     args = parser.parse_args()
-    jarvis = Jarvis(load_settings(), Console())
+    settings = load_settings()
+    if settings.log_sessions:
+        log.start()
+    jarvis = Jarvis(settings, Console())
     jarvis.run_ptt() if args.ptt else jarvis.run_handsfree()
 
 

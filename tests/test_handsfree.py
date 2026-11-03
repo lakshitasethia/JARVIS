@@ -78,3 +78,12 @@ def test_earcons_are_short_and_quiet():
         assert 0.1 < len(audio) / 24_000 < 0.3
         assert np.abs(audio).max() <= 0.25 + 1e-6
         assert abs(audio[0]) < 0.01 and abs(audio[-1]) < 0.01  # faded, no click
+
+
+def test_goodbye_and_bare_wake_word():
+    from jarvis.main import is_just_wake_word
+
+    for text in ["Okay, goodbye.", "Bye!", "Thank you, goodbye.", "That'll be all."]:
+        assert is_sleep_phrase(text), text
+    assert is_just_wake_word("Hey Jarvis.") and is_just_wake_word("Jarvis?")
+    assert not is_just_wake_word("Hey Jarvis, what time is it?")

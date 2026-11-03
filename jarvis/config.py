@@ -17,6 +17,7 @@ class Settings:
     user_name: str
     max_history_messages: int
     show_timing: bool
+    log_sessions: bool
     # Tools
     home_location: str
     web_search: bool
@@ -26,6 +27,8 @@ class Settings:
     silence_seconds: float
     listen_timeout: float
     followup_seconds: float
+    barge_in: bool
+    echo_cancel: bool
     # Voice
     tts_engine: str  # kokoro | say | none
     voice: str
@@ -50,6 +53,7 @@ def load_settings() -> Settings:
         user_name=os.getenv("JARVIS_USER_NAME", "sir"),
         max_history_messages=int(os.getenv("JARVIS_MAX_HISTORY", "20")),
         show_timing=os.getenv("JARVIS_SHOW_TIMING", "true").lower() == "true",
+        log_sessions=os.getenv("JARVIS_LOG", "true").lower() == "true",
         home_location=os.getenv("JARVIS_HOME_LOCATION", "").strip(),
         web_search=os.getenv("JARVIS_WEB_SEARCH", "true").lower() == "true",
         stt_model=os.getenv("JARVIS_STT_MODEL", "whisper-large-v3-turbo"),
@@ -57,6 +61,8 @@ def load_settings() -> Settings:
         silence_seconds=float(os.getenv("JARVIS_SILENCE_SECONDS", "0.8")),
         listen_timeout=float(os.getenv("JARVIS_LISTEN_TIMEOUT", "8")),
         followup_seconds=float(os.getenv("JARVIS_FOLLOWUP_SECONDS", "6")),
+        barge_in=os.getenv("JARVIS_BARGE_IN", "true").lower() == "true",
+        echo_cancel=os.getenv("JARVIS_ECHO_CANCEL", "true").lower() == "true",
         tts_engine=os.getenv("JARVIS_TTS", "kokoro").lower(),
         voice=os.getenv("JARVIS_VOICE", "bm_george"),
         speech_speed=float(os.getenv("JARVIS_SPEECH_SPEED", "1.0")),

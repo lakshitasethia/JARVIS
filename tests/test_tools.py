@@ -273,3 +273,57 @@ def test_empty_reply_is_retried_once():
 def test_error_text_from_a_tool_counts_as_failure():
     r = ToolRegistry([Tool("t", "d", params(), lambda: "Error: couldn't find that app.")])
     assert r.run("t", "{}", lambda q: False) == ("Error: couldn't find that app.", False)
+
+
+# --- glitch safeguards (Phase 4) ------------------------------------------------------------
+
+from jarvis.brain.agent import SCRAMBLED, JunkLineFilter, Scrambled
+from jarvis.listen.stt import is_junk_transcript
+from jarvis.speak.sentences import clean_for_speech
+
+
+def junk_filter_all(chunks):
+    f = JunkLineFilter()
+    return "".join(f.feed(c) for c in chunks)
+
+
+def test_junk_lines_are_hidden_and_normal_text_streams():
+    assert junk_filter_all(["...\n", "It's ", "sunny."]) == "It's sunny."
+    assert junk_filter_all(["Hello", " there.\n\nBye."]) == "Hello there.\nBye."
+    assert junk_filter_all(["... well, ", "maybe."]) == "... well, maybe."  # punctuation then words is fine
+
+
+def test_degenerate_output_is_detected():
+    # what the user saw: dots on their own lines with blank lines between
+    import pytest
+
+    with pytest.raises(Scrambled):
+        junk_filter_all(["...\n\n", "...\n\n", "I'm sorry\n\n", "...\n"])
+    with pytest.raises(Scrambled):
+        junk_filter_all(["Hi\n\n\n\nthere"])
+
+
+def test_scrambled_reply_is_retried_then_apologised_for():
+    convo = Conversation("SYS")
+    convo.add_user("hi")
+    events = list(Agent(FlakyLLM([["...\n\n...\n\n"], ["Hello, sir."]]), make_registry()).run(convo, lambda q: False))
+    assert [e.text for e in events] == ["Hello, sir."]
+
+    convo = Conversation("SYS")
+    convo.add_user("hi")
+    events = list(Agent(FlakyLLM([["...\n\n...\n"], ["…\n\n…\n"]]), make_registry()).run(convo, lambda q: False))
+    assert [e.text for e in events] == [SCRAMBLED]
+    assert convo.history[-1]["content"] == SCRAMBLED
+
+
+def test_junk_transcripts():
+    for t in ["...", ".", " ♪ ", "", "Thanks for watching!", "you"]:
+        assert is_junk_transcript(t), t
+    for t in ["Yes.", "No", "What time is it?", "Thank you, Jarvis."]:
+        assert not is_junk_transcript(t), t
+
+
+def test_punctuation_only_is_never_spoken():
+    assert clean_for_speech("...") == ""
+    assert clean_for_speech("…… —") == ""
+    assert clean_for_speech("... Right.") == "... Right."

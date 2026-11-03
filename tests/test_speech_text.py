@@ -56,3 +56,17 @@ def test_audio_helpers():
     assert duration(np.zeros(8000, dtype=np.int16)) == 0.5
     with wave.open(io.BytesIO(to_wav_bytes(samples)), "rb") as w:
         assert (w.getframerate(), w.getnchannels(), w.getnframes()) == (16000, 1, 4)
+
+
+def test_long_opening_sentence_starts_speaking_at_first_comma():
+    s = SentenceSplitter(first_clause_chars=40)
+    out = s.feed("In the mist-shrouded valleys of Elderglen, a dragon named Aelthys slumbered")
+    assert out == ["In the mist-shrouded valleys of Elderglen,"]
+    # later sentences split normally, even with commas
+    out = s.feed(" beneath the hills. Each spring, the villagers, fearful, brought gifts. ")
+    assert out == ["a dragon named Aelthys slumbered beneath the hills.", "Each spring, the villagers, fearful, brought gifts."]
+
+
+def test_short_opening_sentence_is_not_split():
+    s = SentenceSplitter(first_clause_chars=40)
+    assert s.feed("Yes, sir. Right away, of course, it's done.") == ["Yes, sir."]
