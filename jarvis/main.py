@@ -29,11 +29,14 @@ from jarvis.listen.bargein import BargeInMonitor
 from jarvis.listen.endpoint import EndpointConfig, Status, UtteranceCollector
 from jarvis.listen.stt import GroqSTT, is_junk_transcript
 from jarvis.listen.yesno import parse_yes_no
+from jarvis.memory import MemoryStore
 from jarvis.speak import earcons
 from jarvis.speak.sentences import SentenceSplitter, clean_for_speech
 from jarvis.speak.speaker import Speaker
 from jarvis.speak.tts import KokoroTTS, SayTTS
 from jarvis.tools import build_registry
+from jarvis.tools.phone import AndroidPhone
+from jarvis.tools.registry import DECLINED
 from jarvis.tools.timers import TimerManager
 
 PTT_HELP = (
@@ -64,6 +67,7 @@ class AudioDeviceLost(Exception):
 
 
 EXIT_RESTART = 75  # exit code that tells the background service to start JARVIS again
+PROJECT_DIR = Path(__file__).resolve().parent.parent
 
 
 def is_just_wake_word(text: str) -> bool:
@@ -118,9 +122,12 @@ class Jarvis:
         self.speaker = build_speaker(settings)
         self.muted = False
         self.timers = TimerManager(self.announce)
-        self.agent = Agent(self.llm, build_registry(self.timers, settings.home_location))
+        self.memory = MemoryStore(PROJECT_DIR / "data" / "memory.db")
+        phone = AndroidPhone(settings.phone_serial, settings.adb_path)
+        self.agent = Agent(self.llm, build_registry(self.timers, settings.home_location, self.memory, phone))
         self.convo = Conversation(
-            lambda: system_prompt(settings.user_name, settings.home_location), settings.max_history_messages
+            lambda: system_prompt(settings.user_name, settings.home_location, self.memory.prompt_section()),
+            settings.max_history_messages,
         )
         # How to ask the user yes/no; each mode installs its own.
         self.confirm = self.confirm_typed
@@ -256,7 +263,12 @@ class Jarvis:
                         f"[dim]  ⚙ {event.name}({summarize_arguments(event.arguments)})[/dim]", end=""
                     )
                 elif isinstance(event, ToolFinished):
-                    mark = "[green]✓[/green]" if event.ok else f"[red]✗ {event.output[:120]}[/red]"
+                    if event.ok:
+                        mark = "[green]✓[/green]"
+                    elif event.output == DECLINED:
+                        mark = "[yellow]✗ declined[/yellow]"
+                    else:
+                        mark = f"[red]✗ {event.output[:120]}[/red]"
                     self.console.print(f" {mark}")
                     mid_line = line_has_text = False
             speak(splitter.flush())
@@ -526,7 +538,7 @@ def _stop_on_sigterm(signum, frame) -> None:
 _lock_file = None
 
 
-LISTENING_LOCK = Path(__file__).resolve().parent.parent / "logs" / ".listening.lock"
+LISTENING_LOCK = PROJECT_DIR / "logs" / ".listening.lock"
 
 
 def _hold_single_listener_lock(path: Path = LISTENING_LOCK) -> None:

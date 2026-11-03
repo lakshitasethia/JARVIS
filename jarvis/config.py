@@ -21,6 +21,8 @@ class Settings:
     # Tools
     home_location: str
     web_search: bool
+    phone_serial: str
+    adb_path: str
     # Ears
     stt_model: str
     wake_threshold: float
@@ -56,6 +58,8 @@ def load_settings() -> Settings:
         log_sessions=os.getenv("JARVIS_LOG", "true").lower() == "true",
         home_location=os.getenv("JARVIS_HOME_LOCATION", "").strip(),
         web_search=os.getenv("JARVIS_WEB_SEARCH", "true").lower() == "true",
+        phone_serial=os.getenv("JARVIS_PHONE_SERIAL", "").strip(),
+        adb_path=os.getenv("JARVIS_ADB", "").strip(),
         stt_model=os.getenv("JARVIS_STT_MODEL", "whisper-large-v3-turbo"),
         wake_threshold=float(os.getenv("JARVIS_WAKE_THRESHOLD", "0.5")),
         silence_seconds=float(os.getenv("JARVIS_SILENCE_SECONDS", "0.8")),

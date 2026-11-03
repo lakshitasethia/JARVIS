@@ -44,7 +44,7 @@ def test_sensitive_tool_needs_a_yes():
     r = make_registry()
     asked = []
     out, ok = r.run("danger", '{"x": "launch"}', lambda q: asked.append(q) or False)
-    assert asked == ["Really launch?"] and not ok and "declined" in out
+    assert asked == ["Really launch?"] and not ok and out.startswith("NOT DONE")
     assert r.run("danger", '{"x": "launch"}', lambda q: True) == ("did launch", True)
 
 

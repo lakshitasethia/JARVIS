@@ -6,6 +6,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 MAX_OUTPUT_CHARS = 2_000  # keep tool results small: Groq's free tier allows ~8k tokens/minute
+DECLINED = (
+    "NOT DONE. The user answered NO to the confirmation, so this action did not happen and nothing "
+    "changed. Tell them you've left things as they were. Do not say it was done."
+)
 
 # Asks the user a yes/no question; returns True only on a clear "yes".
 Confirmer = Callable[[str], bool]
@@ -63,7 +67,7 @@ class ToolRegistry:
             except TypeError as e:
                 return f"Error: bad arguments for {name} ({e}).", False
             if not confirmer(question):
-                return "The user declined, so nothing was done. Acknowledge briefly.", False
+                return DECLINED, False
 
         try:
             output = tool.func(**args)

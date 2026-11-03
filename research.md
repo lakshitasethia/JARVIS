@@ -221,7 +221,7 @@ Each phase ends with something that **works and can be demoed**.
 | **2. Hands-free** ✅ | openWakeWord "hey jarvis", Silero VAD end-of-speech, follow-up window (keep listening ~8 s after a reply) | "Hey Jarvis, what time is it?" works with no keyboard |
 | **3. Tools** ✅ | Agent loop + native tools (time, weather, web search, open apps, volume, timers, macOS reminders/notes) + permission tiers + confirmation | "Open Spotify and set a 10-minute timer" works |
 | **4. Natural conversation** ✅ | Barge-in (interrupt while speaking), smart turn detection, latency tuning | You can cut JARVIS off mid-sentence and it stops |
-| **5. Memory** | SQLite memory + remember/recall tools, user profile injected into the prompt | "Remember I like my coffee black" persists across restarts |
+| **5. Memory** ✅ | SQLite memory + remember/recall tools, user profile injected into the prompt | "Remember I like my coffee black" persists across restarts |
 | **6. MCP integrations** | MCP client; connect calendar, email, files, browser (Playwright), GitHub | "What's on my calendar tomorrow?" / "Summarize my unread email" |
 | **7. Proactivity** | Scheduler: morning briefing, reminders, alerts | JARVIS speaks first: "Good morning. You have three meetings today…" |
 | **8. Vision & polish** (launch at login pulled forward: `jarvis-service`) | Screen/camera understanding, menu-bar app UI, launch at login, local LLM offline mode | Feels like a product |

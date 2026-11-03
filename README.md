@@ -3,7 +3,7 @@
 A personal JARVIS-style AI assistant for macOS, built step by step.
 See [research.md](research.md) for the research, architecture, and roadmap.
 
-**Status:** Phase 4: natural conversation. Talk over JARVIS to interrupt it (echo-cancelled, works on laptop speakers). Earlier: Phase 3, tools. JARVIS can act: open/quit apps, volume, Spotify/Music, timers, weather, Apple Reminders, web search.
+**Status:** Phase 5: memory. JARVIS remembers you across sessions (local SQLite). Earlier: Phase 4, natural conversation. Talk over JARVIS to interrupt it (echo-cancelled, works on laptop speakers). Earlier: Phase 3, tools. JARVIS can act: open/quit apps, volume, Spotify/Music, timers, weather, Apple Reminders, web search.
 
 | Ask | Tool |
 |---|---|
@@ -15,6 +15,9 @@ See [research.md](research.md) for the research, architecture, and roadmap.
 | "Do I need an umbrella tomorrow?" | `get_weather` (Open-Meteo, no key) |
 | "Remind me to call Mum at 6pm" | `create_reminder` (Apple Reminders) |
 | "Who won the match last night?" | web search (Groq built-in) |
+| "Unlock my phone" *(asks first)* / "Lock my phone" / "Show my phone" | `unlock_phone`, `lock_phone`, `show_phone` (Android over Wi-Fi; see Phone) |
+| "Open WhatsApp on my phone" / "Go home on my phone" | `open_phone_app` (unlocks first if needed), `phone_home` |
+| "I'm vegetarian" / "Remember my sister is Riya" | `remember` (also `update_memory`, `forget`, `forget_everything` *(asks first)*) |
 
 Sensitive actions (like quitting an app) ask for a yes/no first. JARVIS enforces that in code, not just in the prompt.
 The first time JARVIS controls an app like Reminders or Spotify, macOS asks you to allow it (Automation permission).
@@ -40,6 +43,25 @@ Session logs go to `logs/` (git-ignored) so odd behaviour can be diagnosed.
 Commands: `/mute`, `/reset`, `/help`, `/quit`.
 
 The first time you talk, macOS will ask to give your terminal app microphone access. Allow it.
+
+## Phone (Android, e.g. Galaxy S25)
+
+JARVIS can wake and unlock your phone, lock it, and mirror it in a window on the Mac, over Wi-Fi via
+Android's official Wireless debugging. One-time setup:
+
+1. **Phone:** Settings → About phone → Software information → tap **Build number** 7 times (enables Developer options).
+2. **Phone:** Settings → Developer options → **Wireless debugging** → on. Phone and Mac must be on the same Wi-Fi.
+   If the switch won't turn on: Settings → Security and privacy → **Auto Blocker** → off.
+3. **Phone:** Wireless debugging → **Pair device with pairing code**. **Mac:** `adb pair <ip:port>` and enter the code.
+4. **Mac:** `adb connect <ip:port>` (the address on the main Wireless debugging screen), then `adb devices` should list the phone.
+5. **Mac:** save your PIN in the macOS Keychain (typed hidden, stored encrypted):
+   `security add-generic-password -a jarvis -s jarvis-phone-pin -w`
+
+Safety rules (enforced in code): no unlocking while the Mac is locked; a spoken "yes" is required; the PIN is
+only typed when the phone is verifiably at its lock screen; one attempt, then a 5-minute cooldown (Samsung
+locks you out after repeated wrong PINs); the PIN never goes to the AI model or the logs.
+Limits: after the phone restarts, Wireless debugging is off and the first unlock must be by hand.
+Anyone who can talk to your *unlocked* Mac could ask JARVIS to unlock your phone. Keep that in mind.
 
 ## Always on (no terminal)
 
@@ -71,6 +93,7 @@ jarvis/
 ├── config.py            settings from .env
 ├── main.py              main loop: listen → think → speak
 ├── log.py               session log (logs/*.jsonl)
+├── memory.py            long-term memory (data/memory.db, local only)
 ├── audio/
 │   ├── echo.py          echo cancellation (WebRTC AEC3): removes JARVIS's voice from the mic
 │   ├── mic.py           always-on mic stream (80 ms frames) + processing thread
